@@ -2,11 +2,11 @@
 
 /**
  * Contract Security Scanner - Main Entry Point
- * 
+ *
  * A comprehensive security vulnerability scanner for Solidity smart contracts.
  * Detects common security issues including reentrancy, access control problems,
- * integer overflows, and other vulnerabilities.
- * 
+ * integer overflows, and other vulnerabilities using both regex and AST-based analysis.
+ *
  * Usage:
  *   npx ts-node src/index.ts <path-to-solidity-file-or-directory>
  *   node dist/index.js <path>
@@ -26,8 +26,18 @@ import {
   formatSummary,
   resultsToJson,
   isValidSolidity,
-  extractContractNames
+  extractContractNames,
+  parseSolidityToAST
 } from './utils';
+import {
+  analyzeAST,
+  findNodesByType,
+  hasModifier,
+  isStateChangingFunction,
+  type ASTAnalysisContext,
+  type SourceUnit,
+  type ASTNode
+} from './ast';
 
 const VERSION = '1.0.0';
 
@@ -42,6 +52,7 @@ interface CliOptions {
   verbose: boolean;
   deepScan: boolean;
   noSnippets: boolean;
+  noAST: boolean;
 }
 
 function printBanner(): void {
@@ -49,6 +60,7 @@ function printBanner(): void {
 ╔═══════════════════════════════════════════════════════════╗
 ║           Contract Security Scanner v${VERSION}              ║
 ║     Solidity Smart Contract Vulnerability Detection       ║
+║            AST-based + Pattern Analysis Engine            ║
 ╚═══════════════════════════════════════════════════════════╝
 `);
 }
@@ -73,6 +85,7 @@ OPTIONS:
   -c, --category    Scan specific categories only (comma-separated)
   --deep            Enable deep analysis (slower, more thorough)
   --no-snippets     Don't include code snippets in output
+  --no-ast          Disable AST-based analysis (regex only)
   --verbose         Show detailed scan information
 
 EXAMPLES:
@@ -80,6 +93,7 @@ EXAMPLES:
   contract-sec-scanner ./src/contracts --format json -o report.json
   contract-sec-scanner . --min-sev high --exclude INTEGER-001
   contract-sec-scanner ./defi --category "Reentrancy,Access Control"
+  contract-sec-scanner ./protocol --deep --verbose --no-ast
 
 AVAILABLE CATEGORIES:
   ${getAllCategories().join(', ')}
@@ -104,7 +118,8 @@ function parseArgs(args: string[]): CliOptions {
     categories: [],
     verbose: false,
     deepScan: false,
-    noSnippets: false
+    noSnippets: false,
+    noAST: false
   };
 
   let i = 0;
@@ -152,6 +167,9 @@ function parseArgs(args: string[]): CliOptions {
       case '--no-snippets':
         options.noSnippets = true;
         break;
+      case '--no-ast':
+        options.noAST = true;
+        break;
       case '--verbose':
         options.verbose = true;
         break;
@@ -194,21 +212,22 @@ function scanTarget(targetPath: string, options: CliOptions): ScanResult[] {
     excludeRules: options.exclude,
     minSeverity: options.minSeverity,
     includeSnippets: !options.noSnippets,
-    scanComments: false
+    scanComments: false,
+    useAST: !options.noAST
   };
 
   const scanner = createScanner(scannerOptions);
   const results: ScanResult[] = [];
 
   const resolvedPath = path.resolve(targetPath);
-  
+
   if (!fs.existsSync(resolvedPath)) {
     console.error(`Error: Path does not exist: ${resolvedPath}`);
     process.exit(1);
   }
 
   const solidityFiles = findSolidityFiles(resolvedPath, ['node_modules', '.git', 'dist', 'build']);
-  
+
   if (solidityFiles.length === 0) {
     console.error(`No Solidity files found in: ${resolvedPath}`);
     process.exit(1);
@@ -220,7 +239,7 @@ function scanTarget(targetPath: string, options: CliOptions): ScanResult[] {
 
   for (const filePath of solidityFiles) {
     const fileResult = readSolidityFile(filePath);
-    
+
     if (fileResult.error) {
       if (options.verbose) {
         console.warn(`Skipping ${filePath}: ${fileResult.error}`);
@@ -253,6 +272,7 @@ function scanTarget(targetPath: string, options: CliOptions): ScanResult[] {
     console.log(`  Patterns Matched: ${stats.patternsMatched}`);
     console.log(`  Contracts Scanned: ${stats.contractsScanned}`);
     console.log(`  Functions Analyzed: ${stats.functionsAnalyzed}`);
+    console.log(`  AST Nodes Analyzed: ${stats.astNodesAnalyzed}`);
   }
 
   return results;
@@ -265,7 +285,7 @@ function outputResults(results: ScanResult[], options: CliOptions): void {
     output = resultsToJson(results);
   } else {
     const parts: string[] = [];
-    
+
     for (const result of results) {
       if (result.findings.length > 0) {
         for (const finding of result.findings) {
@@ -314,7 +334,7 @@ function main(): void {
   console.log(`Scanning: ${path.resolve(targetPath)}\n`);
 
   const results = scanTarget(targetPath, options);
-  
+
   const totalFindings = results.reduce((sum, r) => sum + r.findings.length, 0);
   const criticalCount = results.reduce(
     (sum, r) => sum + r.findings.filter((f: Finding) => f.severity === 'critical').length,
@@ -350,7 +370,9 @@ export {
   findSolidityFiles,
   formatFinding,
   formatSummary,
-  resultsToJson
+  resultsToJson,
+  parseSolidityToAST,
+  analyzeAST
 };
 
 export type {
@@ -358,8 +380,29 @@ export type {
   ScanResult,
   Finding,
   Severity,
-  CliOptions
+  CliOptions,
+  ASTAnalysisContext,
+  SourceUnit,
+  ASTNode
 };
+
+export {
+  findNodesByType,
+  hasModifier,
+  isStateChangingFunction,
+  hasTxOrigin,
+  hasBlockTimestamp,
+  hasExternalCall,
+  hasStateWrite,
+  hasAssembly,
+  hasSelfDestruct,
+  isOldSolidityVersion,
+  findPublicStateVariables,
+  findUnprotectedFunctions,
+  findLoopsWithExternalCalls,
+  findDivisionBeforeMultiplication,
+  getPragmaSolidityVersion
+} from './ast';
 
 if (require.main === module) {
   main();

@@ -75,7 +75,7 @@ exports.SECURITY_RULES = [
         name: 'Unchecked Low-Level Call',
         description: 'Low-level call result is not checked for success',
         severity: 'critical',
-        pattern: /\b(?:call|delegatecall|staticcall)\s*\([^)]*\)\s*;/,
+        pattern: /\b(?:call|delegatecall|staticcall)(?:\s*\{[^}]*\})?\s*\([^)]*\)\s*(?:;|=[^;]*)/,
         category: 'External Calls',
         recommendation: 'Always check the return value of low-level calls.',
         swcId: 'SWC-104'

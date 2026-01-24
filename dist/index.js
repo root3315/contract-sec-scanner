@@ -5,7 +5,7 @@
  *
  * A comprehensive security vulnerability scanner for Solidity smart contracts.
  * Detects common security issues including reentrancy, access control problems,
- * integer overflows, and other vulnerabilities.
+ * integer overflows, and other vulnerabilities using both regex and AST-based analysis.
  *
  * Usage:
  *   npx ts-node src/index.ts <path-to-solidity-file-or-directory>
@@ -45,7 +45,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.resultsToJson = exports.formatSummary = exports.formatFinding = exports.findSolidityFiles = exports.readSolidityFile = exports.getRulesByCategory = exports.getAllCategories = exports.SECURITY_RULES = exports.createScanner = exports.SecurityScanner = void 0;
+exports.getPragmaSolidityVersion = exports.findDivisionBeforeMultiplication = exports.findLoopsWithExternalCalls = exports.findUnprotectedFunctions = exports.findPublicStateVariables = exports.isOldSolidityVersion = exports.hasSelfDestruct = exports.hasAssembly = exports.hasStateWrite = exports.hasExternalCall = exports.hasBlockTimestamp = exports.hasTxOrigin = exports.isStateChangingFunction = exports.hasModifier = exports.findNodesByType = exports.analyzeAST = exports.parseSolidityToAST = exports.resultsToJson = exports.formatSummary = exports.formatFinding = exports.findSolidityFiles = exports.readSolidityFile = exports.getRulesByCategory = exports.getAllCategories = exports.SECURITY_RULES = exports.createScanner = exports.SecurityScanner = void 0;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const scanner_1 = require("./scanner");
@@ -61,12 +61,16 @@ Object.defineProperty(exports, "findSolidityFiles", { enumerable: true, get: fun
 Object.defineProperty(exports, "formatFinding", { enumerable: true, get: function () { return utils_1.formatFinding; } });
 Object.defineProperty(exports, "formatSummary", { enumerable: true, get: function () { return utils_1.formatSummary; } });
 Object.defineProperty(exports, "resultsToJson", { enumerable: true, get: function () { return utils_1.resultsToJson; } });
+Object.defineProperty(exports, "parseSolidityToAST", { enumerable: true, get: function () { return utils_1.parseSolidityToAST; } });
+const ast_1 = require("./ast");
+Object.defineProperty(exports, "analyzeAST", { enumerable: true, get: function () { return ast_1.analyzeAST; } });
 const VERSION = '1.0.0';
 function printBanner() {
     console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║           Contract Security Scanner v${VERSION}              ║
 ║     Solidity Smart Contract Vulnerability Detection       ║
+║            AST-based + Pattern Analysis Engine            ║
 ╚═══════════════════════════════════════════════════════════╝
 `);
 }
@@ -90,6 +94,7 @@ OPTIONS:
   -c, --category    Scan specific categories only (comma-separated)
   --deep            Enable deep analysis (slower, more thorough)
   --no-snippets     Don't include code snippets in output
+  --no-ast          Disable AST-based analysis (regex only)
   --verbose         Show detailed scan information
 
 EXAMPLES:
@@ -97,6 +102,7 @@ EXAMPLES:
   contract-sec-scanner ./src/contracts --format json -o report.json
   contract-sec-scanner . --min-sev high --exclude INTEGER-001
   contract-sec-scanner ./defi --category "Reentrancy,Access Control"
+  contract-sec-scanner ./protocol --deep --verbose --no-ast
 
 AVAILABLE CATEGORIES:
   ${(0, rules_1.getAllCategories)().join(', ')}
@@ -120,7 +126,8 @@ function parseArgs(args) {
         categories: [],
         verbose: false,
         deepScan: false,
-        noSnippets: false
+        noSnippets: false,
+        noAST: false
     };
     let i = 0;
     while (i < args.length) {
@@ -166,6 +173,9 @@ function parseArgs(args) {
             case '--no-snippets':
                 options.noSnippets = true;
                 break;
+            case '--no-ast':
+                options.noAST = true;
+                break;
             case '--verbose':
                 options.verbose = true;
                 break;
@@ -201,7 +211,8 @@ function scanTarget(targetPath, options) {
         excludeRules: options.exclude,
         minSeverity: options.minSeverity,
         includeSnippets: !options.noSnippets,
-        scanComments: false
+        scanComments: false,
+        useAST: !options.noAST
     };
     const scanner = (0, scanner_1.createScanner)(scannerOptions);
     const results = [];
@@ -248,6 +259,7 @@ function scanTarget(targetPath, options) {
         console.log(`  Patterns Matched: ${stats.patternsMatched}`);
         console.log(`  Contracts Scanned: ${stats.contractsScanned}`);
         console.log(`  Functions Analyzed: ${stats.functionsAnalyzed}`);
+        console.log(`  AST Nodes Analyzed: ${stats.astNodesAnalyzed}`);
     }
     return results;
 }
@@ -316,6 +328,22 @@ function main() {
         process.exit(0);
     }
 }
+var ast_2 = require("./ast");
+Object.defineProperty(exports, "findNodesByType", { enumerable: true, get: function () { return ast_2.findNodesByType; } });
+Object.defineProperty(exports, "hasModifier", { enumerable: true, get: function () { return ast_2.hasModifier; } });
+Object.defineProperty(exports, "isStateChangingFunction", { enumerable: true, get: function () { return ast_2.isStateChangingFunction; } });
+Object.defineProperty(exports, "hasTxOrigin", { enumerable: true, get: function () { return ast_2.hasTxOrigin; } });
+Object.defineProperty(exports, "hasBlockTimestamp", { enumerable: true, get: function () { return ast_2.hasBlockTimestamp; } });
+Object.defineProperty(exports, "hasExternalCall", { enumerable: true, get: function () { return ast_2.hasExternalCall; } });
+Object.defineProperty(exports, "hasStateWrite", { enumerable: true, get: function () { return ast_2.hasStateWrite; } });
+Object.defineProperty(exports, "hasAssembly", { enumerable: true, get: function () { return ast_2.hasAssembly; } });
+Object.defineProperty(exports, "hasSelfDestruct", { enumerable: true, get: function () { return ast_2.hasSelfDestruct; } });
+Object.defineProperty(exports, "isOldSolidityVersion", { enumerable: true, get: function () { return ast_2.isOldSolidityVersion; } });
+Object.defineProperty(exports, "findPublicStateVariables", { enumerable: true, get: function () { return ast_2.findPublicStateVariables; } });
+Object.defineProperty(exports, "findUnprotectedFunctions", { enumerable: true, get: function () { return ast_2.findUnprotectedFunctions; } });
+Object.defineProperty(exports, "findLoopsWithExternalCalls", { enumerable: true, get: function () { return ast_2.findLoopsWithExternalCalls; } });
+Object.defineProperty(exports, "findDivisionBeforeMultiplication", { enumerable: true, get: function () { return ast_2.findDivisionBeforeMultiplication; } });
+Object.defineProperty(exports, "getPragmaSolidityVersion", { enumerable: true, get: function () { return ast_2.getPragmaSolidityVersion; } });
 if (require.main === module) {
     main();
 }

@@ -1,33 +1,39 @@
 "use strict";
 /**
  * Core scanner implementation for Solidity smart contract security analysis.
- * Applies security rules to detect vulnerabilities in contract source code.
+ * Combines regex-based pattern matching with AST-based structural analysis.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SecurityScanner = void 0;
 exports.createScanner = createScanner;
 const rules_1 = require("./rules");
 const utils_1 = require("./utils");
+const ast_1 = require("./ast");
 class SecurityScanner {
     options;
     stats;
+    astCache;
     constructor(options = {}) {
         this.options = {
             excludeRules: [],
             minSeverity: 'info',
             includeSnippets: true,
             scanComments: false,
+            useAST: true,
             ...options
         };
         this.stats = {
             rulesApplied: 0,
             patternsMatched: 0,
             contractsScanned: 0,
-            functionsAnalyzed: 0
+            functionsAnalyzed: 0,
+            astNodesAnalyzed: 0
         };
+        this.astCache = new Map();
     }
     /**
      * Scan Solidity source code for security vulnerabilities.
+     * Combines regex-based and AST-based analysis.
      */
     scan(source, filePath = 'unknown') {
         const startTime = performance.now();
@@ -56,11 +62,30 @@ class SecurityScanner {
         while (functionPattern.exec(source) !== null) {
             this.stats.functionsAnalyzed++;
         }
+        let astContext = null;
+        if (this.options.useAST) {
+            try {
+                const ast = (0, ast_1.parseSolidityToAST)(source);
+                if (ast) {
+                    astContext = (0, ast_1.analyzeAST)(ast, source);
+                    this.stats.astNodesAnalyzed += countASTNodes(ast);
+                    const astFindings = this.runASTAnalysis(astContext, source, filePath);
+                    findings.push(...astFindings);
+                }
+            }
+            catch (e) {
+                // AST parsing failed, fall back to regex-only analysis
+            }
+        }
         const activeRules = this.getActiveRules();
         this.stats.rulesApplied = activeRules.length;
         for (const rule of activeRules) {
             const ruleFindings = this.applyRule(rule, analysisSource, filePath);
             findings.push(...ruleFindings);
+        }
+        if (astContext) {
+            const deepFindings = this.runDeepASTAnalysis(astContext, source, filePath);
+            findings.push(...deepFindings);
         }
         findings.sort((a, b) => {
             const severityDiff = rules_1.SEVERITY_ORDER[a.severity] - rules_1.SEVERITY_ORDER[b.severity];
@@ -153,8 +178,10 @@ class SecurityScanner {
             rulesApplied: 0,
             patternsMatched: 0,
             contractsScanned: 0,
-            functionsAnalyzed: 0
+            functionsAnalyzed: 0,
+            astNodesAnalyzed: 0
         };
+        this.astCache.clear();
     }
     /**
      * Get available rules for filtering.
@@ -295,8 +322,328 @@ class SecurityScanner {
         }
         return findings;
     }
+    /**
+     * Run AST-based security analysis.
+     */
+    runASTAnalysis(context, source, filePath) {
+        const findings = [];
+        for (const func of context.functions) {
+            if (func.kind !== 'function' || !func.body)
+                continue;
+            if ((0, ast_1.hasTxOrigin)(func.body)) {
+                const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(func.src.split(':')[0], 10));
+                findings.push({
+                    ruleId: 'AST-ACCESS-001',
+                    ruleName: 'Unsafe tx.origin (AST)',
+                    severity: 'critical',
+                    line: pos.line,
+                    column: pos.column,
+                    message: 'Function uses tx.origin for authorization which is vulnerable to phishing',
+                    recommendation: 'Use msg.sender instead of tx.origin'
+                });
+            }
+            if ((0, ast_1.hasBlockTimestamp)(func.body)) {
+                const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(func.src.split(':')[0], 10));
+                findings.push({
+                    ruleId: 'AST-TIMESTAMP-001',
+                    ruleName: 'Timestamp Dependency (AST)',
+                    severity: 'medium',
+                    line: pos.line,
+                    column: pos.column,
+                    message: 'Function logic depends on block.timestamp which miners can manipulate',
+                    recommendation: 'Avoid using block.timestamp for critical logic'
+                });
+            }
+            if ((0, ast_1.hasAssembly)(func.body)) {
+                const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(func.src.split(':')[0], 10));
+                findings.push({
+                    ruleId: 'AST-ASSEMBLY-001',
+                    ruleName: 'Inline Assembly (AST)',
+                    severity: 'high',
+                    line: pos.line,
+                    column: pos.column,
+                    message: 'Function contains inline assembly which bypasses Solidity safety checks',
+                    recommendation: 'Review assembly code carefully for security implications'
+                });
+            }
+            if ((0, ast_1.hasSelfDestruct)(func.body)) {
+                const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(func.src.split(':')[0], 10));
+                findings.push({
+                    ruleId: 'AST-DESTRUCT-001',
+                    ruleName: 'Selfdestruct (AST)',
+                    severity: 'critical',
+                    line: pos.line,
+                    column: pos.column,
+                    message: 'Function can self-destruct the contract',
+                    recommendation: 'Ensure selfdestruct is properly access-controlled'
+                });
+            }
+            if ((0, ast_1.hasExternalCall)(func.body) && (0, ast_1.isStateChangingFunction)(func)) {
+                const hasGuard = (0, ast_1.hasModifier)(func, 'nonReentrant');
+                if (!hasGuard) {
+                    const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(func.src.split(':')[0], 10));
+                    findings.push({
+                        ruleId: 'AST-REENTR-001',
+                        ruleName: 'Missing Reentrancy Guard (AST)',
+                        severity: 'high',
+                        line: pos.line,
+                        column: pos.column,
+                        message: `State-changing function "${func.name || 'anonymous'}" with external call lacks nonReentrant modifier`,
+                        recommendation: 'Add nonReentrant modifier from OpenZeppelin Contracts'
+                    });
+                }
+            }
+        }
+        const stateVarNames = context.stateVariables.map(v => v.name);
+        for (const func of context.functions) {
+            if (!func.body)
+                continue;
+            if ((0, ast_1.hasStateWrite)(func.body, stateVarNames) && (0, ast_1.hasExternalCall)(func.body)) {
+                const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(func.src.split(':')[0], 10));
+                const stateWriteBeforeCall = checkStateWriteBeforeExternalCall(func.body);
+                if (!stateWriteBeforeCall) {
+                    findings.push({
+                        ruleId: 'AST-REENTR-002',
+                        ruleName: 'Reentrancy Pattern (AST)',
+                        severity: 'critical',
+                        line: pos.line,
+                        column: pos.column,
+                        message: 'State is modified after external call - potential reentrancy vulnerability',
+                        recommendation: 'Apply checks-effects-interactions pattern: update state before external calls'
+                    });
+                }
+            }
+        }
+        const unprotected = (0, ast_1.findUnprotectedFunctions)(context, [
+            'withdraw', 'transferOwnership', 'setOwner', 'pause', 'unpause',
+            'mint', 'burn', 'blacklist', 'whitelist', 'setFee', 'updateAddress',
+            'destroy', 'selfdestruct'
+        ]);
+        for (const func of unprotected) {
+            const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(func.src.split(':')[0], 10));
+            findings.push({
+                ruleId: 'AST-ACCESS-002',
+                ruleName: 'Unprotected Sensitive Function (AST)',
+                severity: 'high',
+                line: pos.line,
+                column: pos.column,
+                message: `Sensitive function "${func.name || 'anonymous'}" lacks access control modifier`,
+                recommendation: 'Add onlyOwner or role-based access control modifier'
+            });
+        }
+        const loopFunctions = (0, ast_1.findLoopsWithExternalCalls)(context);
+        for (const func of loopFunctions) {
+            const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(func.src.split(':')[0], 10));
+            findings.push({
+                ruleId: 'AST-DOS-001',
+                ruleName: 'Unbounded Loop with External Call (AST)',
+                severity: 'high',
+                line: pos.line,
+                column: pos.column,
+                message: `Function "${func.name || 'anonymous'}" contains external call inside loop - potential DoS`,
+                recommendation: 'Avoid external calls in loops. Use pull pattern instead.'
+            });
+        }
+        const publicVars = (0, ast_1.findPublicStateVariables)(context.stateVariables);
+        for (const v of publicVars) {
+            const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(v.src.split(':')[0], 10));
+            findings.push({
+                ruleId: 'AST-STORAGE-001',
+                ruleName: 'Public State Variable (AST)',
+                severity: 'info',
+                line: pos.line,
+                column: pos.column,
+                message: `State variable "${v.name}" is public, creating automatic getter`,
+                recommendation: 'Consider making sensitive state variables private or internal'
+            });
+        }
+        if ((0, ast_1.isOldSolidityVersion)(context.pragmas)) {
+            const version = (0, ast_1.getPragmaSolidityVersion)(context.pragmas);
+            findings.push({
+                ruleId: 'AST-VERSION-001',
+                ruleName: 'Old Solidity Version (AST)',
+                severity: 'medium',
+                line: 1,
+                column: 1,
+                message: `Contract uses Solidity ${version} which lacks built-in overflow protection`,
+                recommendation: 'Upgrade to Solidity 0.8+ for built-in overflow protection'
+            });
+        }
+        return findings;
+    }
+    /**
+     * Run deeper AST analysis for complex patterns.
+     */
+    runDeepASTAnalysis(context, source, filePath) {
+        const findings = [];
+        for (const contract of context.contracts) {
+            for (const node of contract.nodes) {
+                if (node.nodeType === 'FunctionDefinition') {
+                    const func = node;
+                    if (!func.body)
+                        continue;
+                    const divBeforeMult = (0, ast_1.findDivisionBeforeMultiplication)(func.body);
+                    for (const divNode of divBeforeMult) {
+                        const pos = (0, utils_1.getPositionFromIndex)(source, parseInt(divNode.src.split(':')[0], 10));
+                        findings.push({
+                            ruleId: 'AST-LOGIC-001',
+                            ruleName: 'Division Before Multiplication (AST)',
+                            severity: 'low',
+                            line: pos.line,
+                            column: pos.column,
+                            message: 'Division before multiplication causes precision loss',
+                            recommendation: 'Multiply before divide: (a * b) / c'
+                        });
+                    }
+                }
+            }
+        }
+        return findings;
+    }
 }
 exports.SecurityScanner = SecurityScanner;
+function countASTNodes(ast) {
+    let count = 0;
+    function traverse(node) {
+        count++;
+        const children = getNodeChildren(node);
+        children.forEach(traverse);
+    }
+    traverse(ast);
+    return count;
+}
+function getNodeChildren(node) {
+    const children = [];
+    if ('nodes' in node && Array.isArray(node.nodes)) {
+        children.push(...node.nodes);
+    }
+    if ('statements' in node && Array.isArray(node.statements)) {
+        children.push(...node.statements);
+    }
+    if ('body' in node && node.body && typeof node.body === 'object' && 'nodeType' in node.body) {
+        children.push(node.body);
+    }
+    if ('parameters' in node && node.parameters && typeof node.parameters === 'object' && 'nodeType' in node.parameters) {
+        const params = node.parameters;
+        if (params.parameters)
+            children.push(...params.parameters);
+    }
+    if ('expression' in node && node.expression && typeof node.expression === 'object' && 'nodeType' in node.expression) {
+        children.push(node.expression);
+    }
+    if ('arguments' in node && Array.isArray(node.arguments)) {
+        children.push(...node.arguments);
+    }
+    if ('leftExpression' in node && node.leftExpression && typeof node.leftExpression === 'object') {
+        children.push(node.leftExpression);
+    }
+    if ('rightExpression' in node && node.rightExpression && typeof node.rightExpression === 'object') {
+        children.push(node.rightExpression);
+    }
+    if ('subExpression' in node && node.subExpression && typeof node.subExpression === 'object') {
+        children.push(node.subExpression);
+    }
+    if ('condition' in node && node.condition && typeof node.condition === 'object') {
+        children.push(node.condition);
+    }
+    if ('trueBody' in node && node.trueBody && typeof node.trueBody === 'object') {
+        children.push(node.trueBody);
+    }
+    if ('falseBody' in node && node.falseBody && typeof node.falseBody === 'object') {
+        children.push(node.falseBody);
+    }
+    if ('initialValue' in node && node.initialValue && typeof node.initialValue === 'object') {
+        children.push(node.initialValue);
+    }
+    if ('initializationExpression' in node && node.initializationExpression) {
+        children.push(node.initializationExpression);
+    }
+    if ('loopExpression' in node && node.loopExpression) {
+        children.push(node.loopExpression);
+    }
+    if ('leftHandSide' in node && node.leftHandSide && typeof node.leftHandSide === 'object') {
+        children.push(node.leftHandSide);
+    }
+    if ('rightHandSide' in node && node.rightHandSide && typeof node.rightHandSide === 'object') {
+        children.push(node.rightHandSide);
+    }
+    if ('modifiers' in node && Array.isArray(node.modifiers)) {
+        children.push(...node.modifiers);
+    }
+    if ('baseContracts' in node && Array.isArray(node.baseContracts)) {
+        children.push(...node.baseContracts);
+    }
+    if ('members' in node && Array.isArray(node.members)) {
+        children.push(...node.members);
+    }
+    if ('clauses' in node && Array.isArray(node.clauses)) {
+        children.push(...node.clauses);
+    }
+    if ('eventCall' in node && node.eventCall && typeof node.eventCall === 'object') {
+        children.push(node.eventCall);
+    }
+    if ('errorCall' in node && node.errorCall && typeof node.errorCall === 'object') {
+        children.push(node.errorCall);
+    }
+    if ('operations' in node && Array.isArray(node.operations)) {
+        children.push(...node.operations);
+    }
+    if ('ast' in node && node.ast && typeof node.ast === 'object' && 'nodeType' in node.ast) {
+        children.push(node.ast);
+    }
+    if ('trueExpression' in node && node.trueExpression && typeof node.trueExpression === 'object') {
+        children.push(node.trueExpression);
+    }
+    if ('falseExpression' in node && node.falseExpression && typeof node.falseExpression === 'object') {
+        children.push(node.falseExpression);
+    }
+    if ('baseExpression' in node && node.baseExpression && typeof node.baseExpression === 'object') {
+        children.push(node.baseExpression);
+    }
+    if ('indexExpression' in node && node.indexExpression && typeof node.indexExpression === 'object') {
+        children.push(node.indexExpression);
+    }
+    if ('components' in node && Array.isArray(node.components)) {
+        const comps = node.components;
+        children.push(...comps.filter((c) => c !== null));
+    }
+    if ('typeName' in node && node.typeName && typeof node.typeName === 'object' && 'nodeType' in node.typeName) {
+        children.push(node.typeName);
+    }
+    if ('declarations' in node && Array.isArray(node.declarations)) {
+        const decls = node.declarations;
+        children.push(...decls.filter((d) => d !== null));
+    }
+    return children;
+}
+function checkStateWriteBeforeExternalCall(node) {
+    let foundWrite = false;
+    let foundCallAfterWrite = false;
+    function traverse(n) {
+        if (foundCallAfterWrite)
+            return;
+        if (n.nodeType === 'Assignment') {
+            foundWrite = true;
+        }
+        if (n.nodeType === 'FunctionCall') {
+            const call = n;
+            if (call.expression?.nodeType === 'MemberAccess') {
+                const memberName = call.expression.memberName;
+                if (memberName && ['call', 'delegatecall', 'staticcall', 'transfer', 'send'].includes(memberName)) {
+                    if (foundWrite) {
+                        foundCallAfterWrite = true;
+                    }
+                }
+            }
+        }
+        const children = getNodeChildren(n);
+        for (const child of children) {
+            traverse(child);
+        }
+    }
+    traverse(node);
+    return !foundCallAfterWrite;
+}
 function createScanner(options) {
     return new SecurityScanner(options);
 }

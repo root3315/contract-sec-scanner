@@ -3,6 +3,7 @@
  * Provides file operations, formatting, and helper methods.
  */
 import type { Severity } from './rules';
+import type { SourceUnit } from './ast';
 export interface FileResult {
     filePath: string;
     content: string;
@@ -74,4 +75,29 @@ export declare function isValidSolidity(source: string): boolean;
  * Extract contract names from source code.
  */
 export declare function extractContractNames(source: string): string[];
+/**
+ * Parse Solidity source code into a simplified AST representation.
+ * Uses a heuristic approach since we don't depend on external Solidity parsers.
+ */
+export declare function parseSolidityToAST(source: string): SourceUnit | null;
+/**
+ * Get line count of source code.
+ */
+export declare function getLineCount(source: string): number;
+/**
+ * Get character count excluding whitespace and comments.
+ */
+export declare function getCodeSize(source: string): number;
+/**
+ * Check if source contains specific pattern.
+ */
+export declare function containsPattern(source: string, pattern: RegExp): boolean;
+/**
+ * Find all occurrences of a pattern in source.
+ */
+export declare function findAllOccurrences(source: string, pattern: RegExp): Array<{
+    index: number;
+    match: string;
+    line: number;
+}>;
 //# sourceMappingURL=utils.d.ts.map

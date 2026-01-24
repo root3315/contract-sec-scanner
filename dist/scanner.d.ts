@@ -1,6 +1,6 @@
 /**
  * Core scanner implementation for Solidity smart contract security analysis.
- * Applies security rules to detect vulnerabilities in contract source code.
+ * Combines regex-based pattern matching with AST-based structural analysis.
  */
 import type { SecurityRule, Severity } from './rules';
 import type { Finding, ScanResult } from './utils';
@@ -9,19 +9,23 @@ export interface ScannerOptions {
     minSeverity?: Severity;
     includeSnippets?: boolean;
     scanComments?: boolean;
+    useAST?: boolean;
 }
 export interface ScannerStats {
     rulesApplied: number;
     patternsMatched: number;
     contractsScanned: number;
     functionsAnalyzed: number;
+    astNodesAnalyzed: number;
 }
 export declare class SecurityScanner {
     private options;
     private stats;
+    private astCache;
     constructor(options?: ScannerOptions);
     /**
      * Scan Solidity source code for security vulnerabilities.
+     * Combines regex-based and AST-based analysis.
      */
     scan(source: string, filePath?: string): ScanResult;
     /**
@@ -71,6 +75,14 @@ export declare class SecurityScanner {
      * Analyze access control patterns.
      */
     checkAccessControl(source: string): Finding[];
+    /**
+     * Run AST-based security analysis.
+     */
+    private runASTAnalysis;
+    /**
+     * Run deeper AST analysis for complex patterns.
+     */
+    private runDeepASTAnalysis;
 }
 export declare function createScanner(options?: ScannerOptions): SecurityScanner;
 //# sourceMappingURL=scanner.d.ts.map
