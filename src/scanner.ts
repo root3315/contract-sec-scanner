@@ -119,12 +119,13 @@ export class SecurityScanner {
         if (ast) {
           astContext = analyzeAST(ast, source);
           this.stats.astNodesAnalyzed += countASTNodes(ast);
-          
+
           const astFindings = this.runASTAnalysis(astContext, source, filePath);
           findings.push(...astFindings);
         }
       } catch (e) {
-        // AST parsing failed, fall back to regex-only analysis
+        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+        console.error(`[AST Parse Error] Failed to parse AST for ${filePath}: ${errorMessage}`);
       }
     }
 
