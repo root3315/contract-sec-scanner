@@ -74,7 +74,8 @@ class SecurityScanner {
                 }
             }
             catch (e) {
-                // AST parsing failed, fall back to regex-only analysis
+                const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+                console.error(`[AST Parse Error] Failed to parse AST for ${filePath}: ${errorMessage}`);
             }
         }
         const activeRules = this.getActiveRules();
